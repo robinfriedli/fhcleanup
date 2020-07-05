@@ -172,75 +172,55 @@ fn main() {
 
 fn handle_dir(path: Option<String>, opt: Arc<Opt>, pool: ThreadPool) {
     let current_path = path.clone().unwrap_or_else(|| String::from("./"));
-    match fs::read_dir(&current_path) {
-        Ok(dir_elems) => {
-            let mut fh_files_map: HashMap<String, Vec<FHFile>> = HashMap::new();
-            let verbosity_level = opt.verbose;
-            if verbosity_level >= 2 {
-                println!("stepping into dir: {}", &current_path);
-            }
+    let dir_elems = fs::read_dir(&current_path).expect("could not read current directory");
+    let mut fh_files_map: HashMap<String, Vec<FHFile>> = HashMap::new();
+    let verbosity_level = opt.verbose;
+    if verbosity_level >= 2 {
+        println!("stepping into dir: {}", &current_path);
+    }
 
-            for dir_elem in dir_elems {
-                match dir_elem {
-                    Ok(dir_elem) => {
-                        handle_dir_elem(
-                            dir_elem,
-                            &opt,
-                            &pool,
-                            &current_path,
-                            &mut fh_files_map,
-                            &path,
-                        );
+    for dir_elem in dir_elems {
+        match dir_elem {
+            Ok(dir_elem) => {
+                let file_type = dir_elem.file_type();
+                match file_type {
+                    Ok(file_type) => {
+                        if opt.incl_subdir && file_type.is_dir() {
+                            let cloned_pool = pool.clone();
+                            let cloned_opt = opt.clone();
+                            let current_path = current_path.clone();
+                            pool.execute(move || {
+                                handle_dir(
+                                    Some(
+                                        current_path
+                                            + dir_elem.file_name().to_str().unwrap_or_else(|| {
+                                                panic!(
+                                                    "Invalid UTF-8 file name: '{:?}'",
+                                                    dir_elem.file_name()
+                                                )
+                                            })
+                                            + "/",
+                                    ),
+                                    cloned_opt,
+                                    cloned_pool,
+                                )
+                            });
+                        } else if file_type.is_file() {
+                            handle_file(dir_elem, &mut fh_files_map, &path);
+                        }
                     }
-                    Err(e) => eprintln!("could not read dir element: {}", e),
+                    Err(e) => eprintln!(
+                        "Could not determine file type of {:?}: {}",
+                        dir_elem.path(),
+                        e
+                    ),
                 }
             }
-
-            handle_results(fh_files_map, current_path, verbosity_level, opt);
+            Err(e) => eprintln!("could not read dir element: {}", e),
         }
-        Err(e) => eprintln!("could not open dir '{}': {}", &current_path, e),
     }
-}
 
-#[inline]
-fn handle_dir_elem(
-    dir_elem: DirEntry,
-    opt: &Arc<Opt>,
-    pool: &ThreadPool,
-    current_path: &String,
-    mut fh_files_map: &mut HashMap<String, Vec<FHFile>>,
-    path: &Option<String>,
-) {
-    let file_type = dir_elem.file_type();
-    match file_type {
-        Ok(file_type) => {
-            if opt.incl_subdir && file_type.is_dir() {
-                let cloned_pool = pool.clone();
-                let cloned_opt = opt.clone();
-                let current_path = current_path.clone();
-                pool.execute(move || {
-                    handle_dir(
-                        Some(
-                            current_path
-                                + dir_elem.file_name().to_str().unwrap_or_else(|| {
-                                    panic!("Invalid UTF-8 file name: '{:?}'", dir_elem.file_name())
-                                })
-                                + "/",
-                        ),
-                        cloned_opt,
-                        cloned_pool,
-                    )
-                });
-            } else if file_type.is_file() {
-                handle_file(dir_elem, &mut fh_files_map, path);
-            }
-        }
-        Err(e) => eprintln!(
-            "Could not determine file type of {:?}: {}",
-            dir_elem.path(),
-            e
-        ),
-    }
+    handle_results(fh_files_map, current_path, verbosity_level, opt);
 }
 
 #[inline]
